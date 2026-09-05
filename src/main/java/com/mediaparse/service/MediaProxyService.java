@@ -16,6 +16,8 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 @Service
@@ -87,7 +89,7 @@ public class MediaProxyService {
 
             if (download) {
                 String filename = media.getFilename() != null ? media.getFilename() : "video.mp4";
-                headers.set(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"");
+                headers.set(HttpHeaders.CONTENT_DISPOSITION, attachmentDisposition(filename));
             } else {
                 headers.set(HttpHeaders.CONTENT_DISPOSITION, "inline");
             }
@@ -115,6 +117,17 @@ public class MediaProxyService {
         } catch (Exception ignored) {
             // client aborted / upstream closed
         }
+    }
+
+    /** RFC 5987：兼容中文文件名，强制浏览器下载而非新开页预览 */
+    private static String attachmentDisposition(String filename) {
+        String safe = filename == null || filename.isBlank() ? "download.bin" : filename;
+        String ascii = safe.replaceAll("[^\\x20-\\x7E]", "_");
+        if (ascii.isBlank()) {
+            ascii = "download.bin";
+        }
+        String encoded = URLEncoder.encode(safe, StandardCharsets.UTF_8).replace("+", "%20");
+        return "attachment; filename=\"" + ascii + "\"; filename*=UTF-8''" + encoded;
     }
 
     private static String guessReferer(String mediaUrl) {
