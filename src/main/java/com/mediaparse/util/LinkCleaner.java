@@ -44,7 +44,10 @@ public final class LinkCleaner {
         if (lower.contains("douyin.com") || lower.contains("iesdouyin.com") || lower.contains("v.douyin.com")) {
             return Platform.DOUYIN;
         }
-        if (lower.contains("xiaohongshu.com") || lower.contains("xhslink.com") || lower.contains("xhscdn.com")) {
+        if (lower.contains("xiaohongshu.com")
+                || lower.contains("xhslink.com")
+                || lower.contains("xhslink.cn")
+                || lower.contains("xhscdn.com")) {
             return Platform.XIAOHONGSHU;
         }
         return Platform.UNKNOWN;
