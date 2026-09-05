@@ -330,21 +330,57 @@ public class DouyinParser implements VideoParser {
     }
 
     private String pickBestImageUrl(JsonNode imageNode) {
-        // Prefer larger / download lists when present
-        String url = firstUrl(imageNode.path("download_url_list"));
+        // 注意：download_url_list 使用 tplv-dy-water-v2，会烧录「抖音号」水印
+        // url_list 使用 tplv-dy-aweme-images，一般为无平台水印图
+        String url = pickNonWatermarkUrl(imageNode.path("url_list"));
         if (!hasText(url)) {
-            url = firstUrl(imageNode.path("url_list"));
+            url = pickNonWatermarkUrl(imageNode.path("display_image").path("url_list"));
         }
         if (!hasText(url)) {
-            url = firstUrl(imageNode.path("display_image").path("url_list"));
-        }
-        if (!hasText(url)) {
-            url = firstUrl(imageNode.path("owner_watermark_image").path("url_list"));
+            url = pickNonWatermarkUrl(imageNode.path("download_url_list"));
         }
         if (!hasText(url) && imageNode.isTextual()) {
             url = unescapeJsonUrl(imageNode.asText());
         }
+        // 绝不选用明确的作者/平台水印图字段
+        if (!hasText(url)) {
+            url = null;
+        }
         return url;
+    }
+
+    private String pickNonWatermarkUrl(JsonNode list) {
+        if (list == null || !list.isArray() || list.isEmpty()) {
+            return null;
+        }
+        String fallback = null;
+        String bestJpeg = null;
+        for (int i = list.size() - 1; i >= 0; i--) {
+            String raw = list.get(i).asText(null);
+            String url = unescapeJsonUrl(raw);
+            if (!hasText(url)) {
+                continue;
+            }
+            if (isWatermarkImageUrl(url)) {
+                continue;
+            }
+            if (fallback == null) {
+                fallback = url;
+            }
+            String lower = url.toLowerCase();
+            if (lower.contains(".jpeg") || lower.contains(".jpg") || lower.contains(":q100") || lower.contains("q100.")) {
+                bestJpeg = url;
+                break;
+            }
+        }
+        return bestJpeg != null ? bestJpeg : fallback;
+    }
+
+    private static boolean isWatermarkImageUrl(String url) {
+        String lower = url.toLowerCase();
+        return lower.contains("tplv-dy-water")
+                || lower.contains("watermark")
+                || lower.contains("owner_watermark");
     }
 
     private String pickBestVideoUrl(JsonNode video) {
