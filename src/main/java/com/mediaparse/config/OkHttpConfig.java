@@ -17,7 +17,8 @@ public class OkHttpConfig {
                 .connectTimeout(http.getConnectTimeoutMs(), TimeUnit.MILLISECONDS)
                 .readTimeout(http.getReadTimeoutMs(), TimeUnit.MILLISECONDS)
                 .writeTimeout(http.getReadTimeoutMs(), TimeUnit.MILLISECONDS)
-                .callTimeout(Duration.ofSeconds(45))
+                // 媒体代理会流式传输大文件，不能用短 callTimeout，否则大视频传到一半被掐断
+                .callTimeout(Duration.ofMinutes(10))
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .retryOnConnectionFailure(true)
