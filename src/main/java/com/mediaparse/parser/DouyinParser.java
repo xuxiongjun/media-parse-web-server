@@ -15,7 +15,9 @@ import org.springframework.stereotype.Component;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -32,10 +34,9 @@ public class DouyinParser implements VideoParser {
             "window\\._ROUTER_DATA\\s*=\\s*(\\{.*?\\})\\s*</script>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL
     );
-    private static final Pattern ANY_PLAY_URL = Pattern.compile(
-            "https?://[^\"'\\s\\\\]+(?:\\.mp4|video_id=|mime_type=video)[^\"'\\s\\\\]*",
-            Pattern.CASE_INSENSITIVE
-    );
+
+    private static final String PC_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
     private final HttpFetcher httpFetcher;
     private final AppProperties appProperties;
@@ -60,14 +61,16 @@ public class DouyinParser implements VideoParser {
 
     @Override
     public MediaInfo parse(String rawUrl) throws Exception {
-        String ua = appProperties.getHttp().getUserAgent();
-        String cookie = appProperties.getCookies().getDouyin();
+        String mobileUa = appProperties.getHttp().getUserAgent();
+        if (mobileUa == null || mobileUa.isBlank()) {
+            mobileUa = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
+        }
+        String configuredCookie = blankToEmpty(appProperties.getCookies().getDouyin());
 
-        HttpFetcher.FetchResult expanded = httpFetcher.get(rawUrl, ua, cookie, Map.of(
+        HttpFetcher.FetchResult expanded = httpFetcher.get(rawUrl, mobileUa, configuredCookie, Map.of(
                 "Referer", "https://www.douyin.com/"
         ));
-        String finalUrl = expanded.finalUrl();
-        String videoId = extractVideoId(finalUrl);
+        String videoId = extractVideoId(expanded.finalUrl());
         if (videoId == null) {
             videoId = extractVideoId(expanded.body());
         }
@@ -75,44 +78,75 @@ public class DouyinParser implements VideoParser {
             throw new BusinessException("PARSE_FAILED", "未能从抖音链接中提取视频 ID");
         }
 
-        MediaInfo fromApi = tryItemInfoApi(videoId, ua, cookie);
-        if (fromApi != null && hasText(fromApi.getVideoUrl())) {
-            return fromApi;
+        String ttwid = obtainTtwid();
+        String cookie = mergeCookies(configuredCookie, ttwid);
+
+        MediaInfo fromDetail = tryWebAwemeDetail(videoId, cookie);
+        if (isValid(fromDetail)) {
+            return fromDetail;
         }
 
-        String shareUrl = "https://www.iesdouyin.com/share/video/" + videoId;
-        HttpFetcher.FetchResult page = httpFetcher.get(shareUrl, ua, cookie, Map.of(
+        // Fallback: HTML embedded JSON (older pages)
+        String shareUrl = "https://www.iesdouyin.com/share/video/" + videoId + "/";
+        HttpFetcher.FetchResult page = httpFetcher.get(shareUrl, mobileUa, cookie, Map.of(
                 "Referer", "https://www.douyin.com/"
         ));
         MediaInfo fromPage = extractFromHtml(page.body(), videoId);
-        if (fromPage != null && hasText(fromPage.getVideoUrl())) {
+        if (isValid(fromPage)) {
             return fromPage;
         }
 
         MediaInfo fromFinal = extractFromHtml(expanded.body(), videoId);
-        if (fromFinal != null && hasText(fromFinal.getVideoUrl())) {
+        if (isValid(fromFinal)) {
             return fromFinal;
         }
 
         throw new BusinessException("PARSE_FAILED", "抖音解析失败，页面结构可能已变更或触发风控");
     }
 
-    private MediaInfo tryItemInfoApi(String videoId, String ua, String cookie) {
+    private String obtainTtwid() {
         try {
-            String api = "https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids=" + videoId;
-            HttpFetcher.FetchResult result = httpFetcher.get(api, ua, cookie, Map.of(
-                    "Referer", "https://www.douyin.com/",
+            String body = "{\"region\":\"cn\",\"aid\":1768,\"needFid\":false,\"service\":\"www.douyin.com\","
+                    + "\"migrate_info\":{\"ticket\":\"\",\"source\":\"node\"},\"cbUrlProtocol\":\"https\",\"union\":true}";
+            HttpFetcher.FetchResult result = httpFetcher.postJson(
+                    "https://ttwid.bytedance.com/ttwid/union/register/",
+                    body,
+                    PC_UA,
+                    null,
+                    Map.of("Origin", "https://www.douyin.com", "Referer", "https://www.douyin.com/")
+            );
+            return result.firstCookiePair("ttwid");
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private MediaInfo tryWebAwemeDetail(String videoId, String cookie) {
+        try {
+            String api = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
+                    + "?device_platform=webapp&aid=6383&channel=channel_pc_web"
+                    + "&aweme_id=" + videoId
+                    + "&pc_client_type=1&version_code=190500&version_name=19.5.0"
+                    + "&cookie_enabled=true&screen_width=1920&screen_height=1080"
+                    + "&browser_language=zh-CN&browser_platform=Win32&browser_name=Chrome"
+                    + "&browser_version=122.0.0.0&browser_online=true&engine_name=Blink"
+                    + "&engine_version=122.0.0.0&os_name=Windows&os_version=10"
+                    + "&cpu_core_num=8&device_memory=8&platform=PC&downlink=10"
+                    + "&effective_type=4g&round_trip_time=50";
+
+            HttpFetcher.FetchResult result = httpFetcher.get(api, PC_UA, cookie, Map.of(
+                    "Referer", "https://www.douyin.com/video/" + videoId,
                     "Accept", "application/json, text/plain, */*"
             ));
             if (result.code() >= 400 || result.body() == null || result.body().isBlank()) {
                 return null;
             }
             JsonNode root = objectMapper.readTree(result.body());
-            JsonNode item = root.path("item_list").path(0);
-            if (item.isMissingNode() || item.isNull()) {
+            JsonNode detail = root.path("aweme_detail");
+            if (detail.isMissingNode() || detail.isNull()) {
                 return null;
             }
-            return fromAwemeItem(item);
+            return fromAwemeItem(detail);
         } catch (Exception ignored) {
             return null;
         }
@@ -128,55 +162,26 @@ public class DouyinParser implements VideoParser {
         if (renderEl != null && hasText(renderEl.data())) {
             String decoded = URLDecoder.decode(renderEl.data().trim(), StandardCharsets.UTF_8);
             MediaInfo info = findAwemeDeep(objectMapper.readTree(decoded));
-            if (info != null && hasText(info.getVideoUrl())) {
+            if (isValid(info)) {
                 return info;
             }
         }
 
         Matcher renderMatcher = RENDER_DATA.matcher(html);
         if (renderMatcher.find()) {
-            String encoded = renderMatcher.group(1).trim();
-            String decoded = URLDecoder.decode(encoded, StandardCharsets.UTF_8);
-            JsonNode node = objectMapper.readTree(decoded);
-            MediaInfo info = findAwemeDeep(node);
-            if (info != null) {
+            String decoded = URLDecoder.decode(renderMatcher.group(1).trim(), StandardCharsets.UTF_8);
+            MediaInfo info = findAwemeDeep(objectMapper.readTree(decoded));
+            if (isValid(info)) {
                 return info;
             }
         }
 
         Matcher routerMatcher = ROUTER_DATA.matcher(html);
         if (routerMatcher.find()) {
-            JsonNode node = objectMapper.readTree(routerMatcher.group(1));
-            MediaInfo info = findAwemeDeep(node);
-            if (info != null) {
+            MediaInfo info = findAwemeDeep(objectMapper.readTree(routerMatcher.group(1)));
+            if (isValid(info)) {
                 return info;
             }
-        }
-
-        // Fallback: scan for mp4-like urls and drop watermark playwm marker
-        Matcher urlMatcher = ANY_PLAY_URL.matcher(html);
-        String best = null;
-        while (urlMatcher.find()) {
-            String candidate = unescapeJsonUrl(urlMatcher.group());
-            if (candidate.contains("playwm")) {
-                candidate = candidate.replace("playwm", "play");
-            }
-            if (candidate.contains("video") || candidate.endsWith(".mp4")) {
-                best = candidate;
-                if (!candidate.contains("playwm")) {
-                    break;
-                }
-            }
-        }
-        if (best != null) {
-            return MediaInfo.builder()
-                    .platform(Platform.DOUYIN)
-                    .title("抖音视频 " + videoId)
-                    .author("")
-                    .videoUrl(best)
-                    .coverUrl(null)
-                    .duration(null)
-                    .build();
         }
         return null;
     }
@@ -188,13 +193,13 @@ public class DouyinParser implements VideoParser {
         if (node.isObject()) {
             if (node.has("video") && (node.has("aweme_id") || node.has("desc") || node.has("author"))) {
                 MediaInfo info = fromAwemeItem(node);
-                if (info != null && hasText(info.getVideoUrl())) {
+                if (isValid(info)) {
                     return info;
                 }
             }
-            if (node.has("aweme") && node.get("aweme").isObject()) {
-                MediaInfo info = fromAwemeItem(node.get("aweme"));
-                if (info != null && hasText(info.getVideoUrl())) {
+            if (node.has("aweme_detail") && node.get("aweme_detail").isObject()) {
+                MediaInfo info = fromAwemeItem(node.get("aweme_detail"));
+                if (isValid(info)) {
                     return info;
                 }
             }
@@ -226,27 +231,22 @@ public class DouyinParser implements VideoParser {
         }
         String author = textOrEmpty(item.path("author"), "nickname");
         Integer duration = null;
-        if (item.path("video").path("duration").canConvertToInt()) {
-            duration = item.path("video").path("duration").asInt() / 1000;
+        JsonNode video = item.path("video");
+        if (video.path("duration").canConvertToInt()) {
+            int raw = video.path("duration").asInt();
+            duration = raw > 1000 ? raw / 1000 : raw;
+        } else if (item.path("duration").canConvertToInt()) {
+            int raw = item.path("duration").asInt();
+            duration = raw > 1000 ? raw / 1000 : raw;
         }
 
-        String videoUrl = firstUrl(item.path("video").path("play_addr").path("url_list"));
-        if (!hasText(videoUrl)) {
-            videoUrl = firstUrl(item.path("video").path("download_addr").path("url_list"));
-        }
-        if (!hasText(videoUrl)) {
-            videoUrl = firstUrl(item.path("video").path("play_addr_h264").path("url_list"));
-        }
-        if (hasText(videoUrl) && videoUrl.contains("playwm")) {
-            videoUrl = videoUrl.replace("playwm", "play");
-        }
-
-        String cover = firstUrl(item.path("video").path("origin_cover").path("url_list"));
+        String videoUrl = pickBestVideoUrl(video);
+        String cover = firstUrl(video.path("origin_cover").path("url_list"));
         if (!hasText(cover)) {
-            cover = firstUrl(item.path("video").path("cover").path("url_list"));
+            cover = firstUrl(video.path("cover").path("url_list"));
         }
         if (!hasText(cover)) {
-            cover = firstUrl(item.path("video").path("dynamic_cover").path("url_list"));
+            cover = firstUrl(video.path("dynamic_cover").path("url_list"));
         }
 
         if (!hasText(videoUrl)) {
@@ -260,6 +260,55 @@ public class DouyinParser implements VideoParser {
                 .videoUrl(videoUrl)
                 .duration(duration)
                 .build();
+    }
+
+    private String pickBestVideoUrl(JsonNode video) {
+        Set<String> candidates = new LinkedHashSet<>();
+        addUrls(candidates, video.path("play_addr").path("url_list"));
+        addUrls(candidates, video.path("download_addr").path("url_list"));
+        addUrls(candidates, video.path("play_addr_h264").path("url_list"));
+
+        JsonNode bitRate = video.path("bit_rate");
+        if (bitRate.isArray()) {
+            for (JsonNode br : bitRate) {
+                addUrls(candidates, br.path("play_addr").path("url_list"));
+            }
+        }
+
+        String best = null;
+        for (String url : candidates) {
+            String normalized = normalizePlayUrl(url);
+            if (!hasText(normalized)) {
+                continue;
+            }
+            best = normalized;
+            // Prefer non-watermarked streams
+            if (!normalized.contains("playwm") && !normalized.contains("watermark=1")) {
+                return normalized;
+            }
+        }
+        return best;
+    }
+
+    private static void addUrls(Set<String> out, JsonNode list) {
+        if (list != null && list.isArray()) {
+            for (JsonNode n : list) {
+                if (n != null && n.isTextual()) {
+                    out.add(n.asText());
+                }
+            }
+        }
+    }
+
+    private static String normalizePlayUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        String u = unescapeJsonUrl(url);
+        if (u.contains("playwm")) {
+            u = u.replace("playwm", "play");
+        }
+        return u;
     }
 
     private String extractVideoId(String text) {
@@ -279,8 +328,7 @@ public class DouyinParser implements VideoParser {
 
     private static String firstUrl(JsonNode list) {
         if (list != null && list.isArray() && !list.isEmpty()) {
-            String url = list.get(0).asText(null);
-            return unescapeJsonUrl(url);
+            return unescapeJsonUrl(list.get(0).asText(null));
         }
         return null;
     }
@@ -302,7 +350,32 @@ public class DouyinParser implements VideoParser {
                 .replace("&amp;", "&");
     }
 
+    private static String mergeCookies(String configured, String ttwidPair) {
+        StringBuilder sb = new StringBuilder();
+        if (hasText(configured)) {
+            sb.append(configured.trim());
+        }
+        if (hasText(ttwidPair)) {
+            if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ';') {
+                sb.append("; ");
+            }
+            // avoid duplicate ttwid
+            if (!sb.toString().contains("ttwid=")) {
+                sb.append(ttwidPair);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String blankToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private static boolean isValid(MediaInfo info) {
+        return info != null && hasText(info.getVideoUrl());
     }
 }
