@@ -20,6 +20,7 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedOriginPatterns("*".equals(origins) ? new String[]{"*"} : origins.split(","))
                 .allowedMethods("GET", "POST", "OPTIONS")
                 .allowedHeaders("*")
+                .exposedHeaders("Content-Disposition", "Content-Type", "Content-Length")
                 .maxAge(3600);
     }
 }
