@@ -14,8 +14,10 @@ import org.springframework.stereotype.Component;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -24,7 +26,7 @@ import java.util.regex.Pattern;
 @Component
 public class DouyinParser implements VideoParser {
 
-    private static final Pattern ID_IN_PATH = Pattern.compile("/(?:video|share/video|note)/(\\d+)");
+    private static final Pattern ID_IN_PATH = Pattern.compile("/(?:video|share/video|note|share/note)/(\\d+)");
     private static final Pattern ID_IN_QUERY = Pattern.compile("[?&](?:modal_id|aweme_id|item_ids)=(\\d+)");
     private static final Pattern RENDER_DATA = Pattern.compile(
             "<script[^>]*id=\"RENDER_DATA\"[^>]*>(.*?)</script>",
@@ -75,7 +77,7 @@ public class DouyinParser implements VideoParser {
             videoId = extractVideoId(expanded.body());
         }
         if (videoId == null) {
-            throw new BusinessException("PARSE_FAILED", "未能从抖音链接中提取视频 ID");
+            throw new BusinessException("PARSE_FAILED", "未能从抖音链接中提取作品 ID");
         }
 
         String ttwid = obtainTtwid();
@@ -86,14 +88,19 @@ public class DouyinParser implements VideoParser {
             return fromDetail;
         }
 
-        // Fallback: HTML embedded JSON (older pages)
-        String shareUrl = "https://www.iesdouyin.com/share/video/" + videoId + "/";
-        HttpFetcher.FetchResult page = httpFetcher.get(shareUrl, mobileUa, cookie, Map.of(
-                "Referer", "https://www.douyin.com/"
-        ));
-        MediaInfo fromPage = extractFromHtml(page.body(), videoId);
-        if (isValid(fromPage)) {
-            return fromPage;
+        // Fallback: HTML embedded JSON (older pages / note share)
+        for (String shareUrl : List.of(
+                "https://www.iesdouyin.com/share/note/" + videoId + "/",
+                "https://www.iesdouyin.com/share/video/" + videoId + "/",
+                "https://www.douyin.com/note/" + videoId
+        )) {
+            HttpFetcher.FetchResult page = httpFetcher.get(shareUrl, mobileUa, cookie, Map.of(
+                    "Referer", "https://www.douyin.com/"
+            ));
+            MediaInfo fromPage = extractFromHtml(page.body(), videoId);
+            if (isValid(fromPage)) {
+                return fromPage;
+            }
         }
 
         MediaInfo fromFinal = extractFromHtml(expanded.body(), videoId);
@@ -122,6 +129,14 @@ public class DouyinParser implements VideoParser {
     }
 
     private MediaInfo tryWebAwemeDetail(String videoId, String cookie) {
+        MediaInfo info = fetchAwemeDetail(videoId, cookie, "https://www.douyin.com/note/" + videoId);
+        if (isValid(info)) {
+            return info;
+        }
+        return fetchAwemeDetail(videoId, cookie, "https://www.douyin.com/video/" + videoId);
+    }
+
+    private MediaInfo fetchAwemeDetail(String videoId, String cookie, String referer) {
         try {
             String api = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
                     + "?device_platform=webapp&aid=6383&channel=channel_pc_web"
@@ -135,7 +150,7 @@ public class DouyinParser implements VideoParser {
                     + "&effective_type=4g&round_trip_time=50";
 
             HttpFetcher.FetchResult result = httpFetcher.get(api, PC_UA, cookie, Map.of(
-                    "Referer", "https://www.douyin.com/video/" + videoId,
+                    "Referer", referer,
                     "Accept", "application/json, text/plain, */*"
             ));
             if (result.code() >= 400 || result.body() == null || result.body().isBlank()) {
@@ -240,7 +255,12 @@ public class DouyinParser implements VideoParser {
             duration = raw > 1000 ? raw / 1000 : raw;
         }
 
+        List<String> imageUrls = extractImageUrls(item);
         String videoUrl = pickBestVideoUrl(video);
+        int awemeType = item.path("aweme_type").asInt(-1);
+        boolean imagePost = !imageUrls.isEmpty()
+                && (awemeType == 68 || awemeType == 2 || awemeType == 150 || !hasText(videoUrl));
+
         String cover = firstUrl(video.path("origin_cover").path("url_list"));
         if (!hasText(cover)) {
             cover = firstUrl(video.path("cover").path("url_list"));
@@ -248,18 +268,83 @@ public class DouyinParser implements VideoParser {
         if (!hasText(cover)) {
             cover = firstUrl(video.path("dynamic_cover").path("url_list"));
         }
+        if (!hasText(cover) && !imageUrls.isEmpty()) {
+            cover = imageUrls.get(0);
+        }
 
-        if (!hasText(videoUrl)) {
+        // 图文作品：展示全部图片
+        if (imagePost) {
+            return MediaInfo.builder()
+                    .platform(Platform.DOUYIN)
+                    .mediaType(MediaInfo.TYPE_IMAGE)
+                    .title(hasText(title) ? title : "抖音图文")
+                    .author(author)
+                    .coverUrl(cover)
+                    .imageUrls(imageUrls)
+                    .build();
+        }
+
+        if (!hasText(videoUrl) && imageUrls.isEmpty()) {
             return null;
         }
-        return MediaInfo.builder()
+
+        MediaInfo.Builder builder = MediaInfo.builder()
                 .platform(Platform.DOUYIN)
+                .mediaType(MediaInfo.TYPE_VIDEO)
                 .title(hasText(title) ? title : "抖音视频")
                 .author(author)
                 .coverUrl(cover)
-                .videoUrl(videoUrl)
-                .duration(duration)
-                .build();
+                .duration(duration);
+        if (hasText(videoUrl)) {
+            builder.videoUrl(videoUrl);
+        }
+        if (!imageUrls.isEmpty()) {
+            builder.imageUrls(imageUrls);
+        }
+        return builder.build();
+    }
+
+    private List<String> extractImageUrls(JsonNode item) {
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
+        collectImageNodes(urls, item.path("images"));
+        collectImageNodes(urls, item.path("image_list"));
+        collectImageNodes(urls, item.path("image_infos"));
+        collectImageNodes(urls, item.path("image_post_info").path("images"));
+        collectImageNodes(urls, item.path("image_post_info").path("image_list"));
+        return new ArrayList<>(urls);
+    }
+
+    private void collectImageNodes(Set<String> out, JsonNode list) {
+        if (list == null || !list.isArray()) {
+            return;
+        }
+        for (JsonNode node : list) {
+            if (node == null || node.isNull()) {
+                continue;
+            }
+            String url = pickBestImageUrl(node);
+            if (hasText(url)) {
+                out.add(url);
+            }
+        }
+    }
+
+    private String pickBestImageUrl(JsonNode imageNode) {
+        // Prefer larger / download lists when present
+        String url = firstUrl(imageNode.path("download_url_list"));
+        if (!hasText(url)) {
+            url = firstUrl(imageNode.path("url_list"));
+        }
+        if (!hasText(url)) {
+            url = firstUrl(imageNode.path("display_image").path("url_list"));
+        }
+        if (!hasText(url)) {
+            url = firstUrl(imageNode.path("owner_watermark_image").path("url_list"));
+        }
+        if (!hasText(url) && imageNode.isTextual()) {
+            url = unescapeJsonUrl(imageNode.asText());
+        }
+        return url;
     }
 
     private String pickBestVideoUrl(JsonNode video) {
@@ -376,6 +461,6 @@ public class DouyinParser implements VideoParser {
     }
 
     private static boolean isValid(MediaInfo info) {
-        return info != null && hasText(info.getVideoUrl());
+        return info != null && (info.hasVideo() || info.hasImages());
     }
 }

@@ -1,11 +1,17 @@
 package com.mediaparse.dto;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class ParseResponse {
     private String platform;
+    /** video | image */
+    private String mediaType;
     private String title;
     private String author;
     private String coverProxyUrl;
     private String videoProxyUrl;
+    private List<String> imageProxyUrls = new ArrayList<>();
     private Integer duration;
     private Long expireAt;
 
@@ -19,6 +25,14 @@ public class ParseResponse {
 
     public void setPlatform(String platform) {
         this.platform = platform;
+    }
+
+    public String getMediaType() {
+        return mediaType;
+    }
+
+    public void setMediaType(String mediaType) {
+        this.mediaType = mediaType;
     }
 
     public String getTitle() {
@@ -53,6 +67,14 @@ public class ParseResponse {
         this.videoProxyUrl = videoProxyUrl;
     }
 
+    public List<String> getImageProxyUrls() {
+        return imageProxyUrls;
+    }
+
+    public void setImageProxyUrls(List<String> imageProxyUrls) {
+        this.imageProxyUrls = imageProxyUrls != null ? imageProxyUrls : new ArrayList<>();
+    }
+
     public Integer getDuration() {
         return duration;
     }
@@ -77,6 +99,11 @@ public class ParseResponse {
             return this;
         }
 
+        public Builder mediaType(String mediaType) {
+            target.mediaType = mediaType;
+            return this;
+        }
+
         public Builder title(String title) {
             target.title = title;
             return this;
@@ -94,6 +121,11 @@ public class ParseResponse {
 
         public Builder videoProxyUrl(String videoProxyUrl) {
             target.videoProxyUrl = videoProxyUrl;
+            return this;
+        }
+
+        public Builder imageProxyUrls(List<String> imageProxyUrls) {
+            target.setImageProxyUrls(imageProxyUrls);
             return this;
         }
 

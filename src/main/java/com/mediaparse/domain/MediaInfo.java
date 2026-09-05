@@ -1,11 +1,19 @@
 package com.mediaparse.domain;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class MediaInfo {
+    public static final String TYPE_VIDEO = "video";
+    public static final String TYPE_IMAGE = "image";
+
     private Platform platform;
+    private String mediaType = TYPE_VIDEO;
     private String title;
     private String author;
     private String coverUrl;
     private String videoUrl;
+    private List<String> imageUrls = new ArrayList<>();
     private Integer duration;
 
     public static Builder builder() {
@@ -18,6 +26,14 @@ public class MediaInfo {
 
     public void setPlatform(Platform platform) {
         this.platform = platform;
+    }
+
+    public String getMediaType() {
+        return mediaType;
+    }
+
+    public void setMediaType(String mediaType) {
+        this.mediaType = mediaType;
     }
 
     public String getTitle() {
@@ -52,6 +68,14 @@ public class MediaInfo {
         this.videoUrl = videoUrl;
     }
 
+    public List<String> getImageUrls() {
+        return imageUrls;
+    }
+
+    public void setImageUrls(List<String> imageUrls) {
+        this.imageUrls = imageUrls != null ? imageUrls : new ArrayList<>();
+    }
+
     public Integer getDuration() {
         return duration;
     }
@@ -60,11 +84,24 @@ public class MediaInfo {
         this.duration = duration;
     }
 
+    public boolean hasImages() {
+        return imageUrls != null && !imageUrls.isEmpty();
+    }
+
+    public boolean hasVideo() {
+        return videoUrl != null && !videoUrl.isBlank();
+    }
+
     public static final class Builder {
         private final MediaInfo target = new MediaInfo();
 
         public Builder platform(Platform platform) {
             target.platform = platform;
+            return this;
+        }
+
+        public Builder mediaType(String mediaType) {
+            target.mediaType = mediaType;
             return this;
         }
 
@@ -85,6 +122,11 @@ public class MediaInfo {
 
         public Builder videoUrl(String videoUrl) {
             target.videoUrl = videoUrl;
+            return this;
+        }
+
+        public Builder imageUrls(List<String> imageUrls) {
+            target.setImageUrls(imageUrls);
             return this;
         }
 
