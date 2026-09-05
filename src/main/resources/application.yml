@@ -1,0 +1,27 @@
+server:
+  port: 8080
+  tomcat:
+    max-http-form-post-size: 2MB
+
+spring:
+  application:
+    name: media-parse-backend
+  jackson:
+    default-property-inclusion: non_null
+
+app:
+  cors-origins: "*"
+  media-token-ttl-seconds: 900
+  parse-rate-limit-per-minute: 20
+  http:
+    connect-timeout-ms: 10000
+    read-timeout-ms: 20000
+    user-agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+  # Optional cookies for stricter platforms (leave blank for default)
+  cookies:
+    douyin: ""
+    xiaohongshu: ""
+
+logging:
+  level:
+    com.mediaparse: INFO
