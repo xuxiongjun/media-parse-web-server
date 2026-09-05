@@ -11,6 +11,6 @@ services:
       - key: TZ
         value: Asia/Shanghai
       - key: APP_PARSE_RATE_LIMIT_PER_MINUTE
-        value: "30"
+        value: "120"
       - key: APP_CORS_ORIGINS
         value: "*"

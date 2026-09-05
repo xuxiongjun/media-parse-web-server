@@ -33,8 +33,14 @@ public class RateLimitService {
     public void checkParse(String clientIp) {
         String key = clientIp == null || clientIp.isBlank() ? "unknown" : clientIp;
         AtomicInteger count = counter.get(key, k -> new AtomicInteger(0));
-        if (count.incrementAndGet() > limit) {
-            throw new BusinessException("RATE_LIMIT", "请求过于频繁，请稍后再试");
+        while (true) {
+            int current = count.get();
+            if (current >= limit) {
+                throw new BusinessException("RATE_LIMIT", "请求过于频繁，请稍后再试");
+            }
+            if (count.compareAndSet(current, current + 1)) {
+                return;
+            }
         }
     }
 }
