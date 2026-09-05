@@ -1,0 +1,16 @@
+# Render Blueprint — 后端
+# Dashboard → New → Blueprint → 选本仓库，或按 README 手动创建 Web Service
+services:
+  - type: web
+    name: media-parse-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: TZ
+        value: Asia/Shanghai
+      - key: APP_PARSE_RATE_LIMIT_PER_MINUTE
+        value: "30"
+      - key: APP_CORS_ORIGINS
+        value: "*"

@@ -1,5 +1,6 @@
 server:
-  port: 8080
+  # 云平台（Render/Railway）会注入 PORT；本地默认 8080
+  port: ${PORT:8080}
   tomcat:
     max-http-form-post-size: 2MB
 

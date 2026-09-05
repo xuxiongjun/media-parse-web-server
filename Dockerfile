@@ -7,5 +7,6 @@ RUN mvn -q -DskipTests package
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 COPY --from=build /app/target/media-parse-backend-1.0.0.jar app.jar
+ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
