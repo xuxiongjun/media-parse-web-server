@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "app")
 public class AppProperties {
     private String corsOrigins = "*";
-    private long mediaTokenTtlSeconds = 900;
+    private long mediaTokenTtlSeconds = 3600;
     private int parseRateLimitPerMinute = 120;
     private Http http = new Http();
     private Cookies cookies = new Cookies();

@@ -12,7 +12,7 @@ spring:
 
 app:
   cors-origins: "*"
-  media-token-ttl-seconds: 900
+  media-token-ttl-seconds: 3600
   parse-rate-limit-per-minute: 120
   http:
     connect-timeout-ms: 10000
