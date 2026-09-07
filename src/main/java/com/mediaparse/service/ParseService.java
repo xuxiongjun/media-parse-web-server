@@ -119,9 +119,19 @@ public class ParseService {
 
     private static String buildFilename(MediaInfo info, String ext, Integer index) {
         String base = info.getTitle() == null ? "media" : info.getTitle();
-        base = base.replaceAll("[\\\\/:*?\"<>|]", "_");
+        // 去掉控制字符与 Windows/浏览器非法文件名字符，避免 File System Access 报 Name is not allowed
+        base = base.replaceAll("[\\\\/:*?\"<>|\\x00-\\x1F\\x7F]", "_")
+                .replaceAll("[\\u200B-\\u200F\\u2028\\u2029\\uFEFF]", "")
+                .replaceAll("[.\\s]+$", "")
+                .trim();
+        if (base.isBlank() || ".".equals(base) || "..".equals(base)) {
+            base = "media";
+        }
         if (base.length() > 40) {
-            base = base.substring(0, 40);
+            base = base.substring(0, 40).replaceAll("[.\\s]+$", "");
+            if (base.isBlank()) {
+                base = "media";
+            }
         }
         if (index != null) {
             base = base + "_" + index;
