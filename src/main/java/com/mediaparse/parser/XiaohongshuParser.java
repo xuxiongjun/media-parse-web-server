@@ -350,27 +350,12 @@ public class XiaohongshuParser implements VideoParser {
                 text(note.path("author"), "nickname")
         );
 
-        String videoUrl = null;
-        JsonNode video = note.path("video");
-        if (!video.isMissingNode()) {
-            videoUrl = firstNonBlank(
-                    text(video, "masterUrl"),
-                    text(video.path("media"), "stream"),
-                    firstUrl(video.path("media").path("stream").path("h264")),
-                    firstUrl(video.path("media").path("stream").path("h265")),
-                    text(video, "url")
-            );
-            if (!hasText(videoUrl)) {
-                videoUrl = firstUrl(video.path("consumer").path("originVideoKey"));
-            }
-            if (!hasText(videoUrl)) {
-                JsonNode stream = video.path("media").path("stream");
-                videoUrl = deepFirstMp4(stream);
-            }
-        }
-
+        String videoUrl = pickBestVideoUrl(note.path("video"));
         if (!hasText(videoUrl)) {
             videoUrl = deepFirstMp4(note.path("video"));
+        }
+        if (hasText(videoUrl)) {
+            videoUrl = normalizeUrl(videoUrl);
         }
 
         List<String> imageUrls = extractImageUrls(note);
@@ -392,7 +377,7 @@ public class XiaohongshuParser implements VideoParser {
                 toWatermarkFreeImageUrl(null, null, text(note.path("imageList").path(0), "url")),
                 toWatermarkFreeImageUrl(null, null, text(note.path("cover"), "urlDefault")),
                 toWatermarkFreeImageUrl(null, null, text(note.path("cover"), "url")),
-                text(video.path("image"), "firstFrameFileid"),
+                text(note.path("video").path("image"), "firstFrameFileid"),
                 deepFirstImage(note)
         );
         if (hasText(cover)) {
@@ -634,6 +619,158 @@ public class XiaohongshuParser implements VideoParser {
             return matcher.group(1);
         }
         return null;
+    }
+
+    /**
+     * 优先 originVideoKey 拼 CDN（无水印源片）；其次选 stream 中 258 轨，避开 259 水印轨。
+     */
+    private static String pickBestVideoUrl(JsonNode video) {
+        if (video == null || video.isMissingNode() || video.isNull()) {
+            return null;
+        }
+
+        String fromKey = buildOriginVideoUrl(text(video.path("consumer"), "originVideoKey"));
+        if (hasText(fromKey)) {
+            return fromKey;
+        }
+        // 少数结构把 key 放在 video 根上
+        fromKey = buildOriginVideoUrl(text(video, "originVideoKey"));
+        if (hasText(fromKey)) {
+            return fromKey;
+        }
+
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        collectStreamUrls(candidates, video.path("media").path("stream"));
+        addIfHttp(candidates, text(video, "masterUrl"));
+        addIfHttp(candidates, text(video, "url"));
+
+        String bestNoWm = null;
+        String bestAny = null;
+        for (String candidate : candidates) {
+            String normalized = normalizeUrl(candidate);
+            if (!hasText(normalized)) {
+                continue;
+            }
+            if (bestAny == null) {
+                bestAny = normalized;
+            }
+            if (isLikelyWatermarkedVideo(normalized)) {
+                continue;
+            }
+            if (bestNoWm == null || scoreVideoUrl(normalized) > scoreVideoUrl(bestNoWm)) {
+                bestNoWm = normalized;
+            }
+        }
+        return firstNonBlank(bestNoWm, bestAny);
+    }
+
+    private static void collectStreamUrls(LinkedHashSet<String> out, JsonNode stream) {
+        if (stream == null || stream.isMissingNode() || stream.isNull()) {
+            return;
+        }
+        if (stream.isObject()) {
+            for (String codec : List.of("h264", "h265", "h266", "av1")) {
+                collectStreamArray(out, stream.path(codec));
+            }
+            addIfHttp(out, text(stream, "masterUrl"));
+            firstUrlList(out, stream.path("backupUrls"));
+            return;
+        }
+        if (stream.isArray()) {
+            collectStreamArray(out, stream);
+        } else if (stream.isTextual()) {
+            addIfHttp(out, stream.asText());
+        }
+    }
+
+    private static void collectStreamArray(LinkedHashSet<String> out, JsonNode arr) {
+        if (arr == null || arr.isMissingNode() || arr.isNull()) {
+            return;
+        }
+        if (arr.isObject()) {
+            addIfHttp(out, text(arr, "masterUrl"));
+            firstUrlList(out, arr.path("backupUrls"));
+            addIfHttp(out, text(arr, "url"));
+            return;
+        }
+        if (!arr.isArray()) {
+            return;
+        }
+        for (JsonNode item : arr) {
+            if (item == null || item.isNull()) {
+                continue;
+            }
+            if (item.isTextual()) {
+                addIfHttp(out, item.asText());
+                continue;
+            }
+            if (item.isObject()) {
+                addIfHttp(out, text(item, "masterUrl"));
+                firstUrlList(out, item.path("backupUrls"));
+                addIfHttp(out, text(item, "url"));
+            }
+        }
+    }
+
+    private static void firstUrlList(LinkedHashSet<String> out, JsonNode list) {
+        if (list == null || !list.isArray()) {
+            return;
+        }
+        for (JsonNode item : list) {
+            if (item != null && item.isTextual()) {
+                addIfHttp(out, item.asText());
+            }
+        }
+    }
+
+    private static void addIfHttp(LinkedHashSet<String> out, String url) {
+        if (hasText(url) && url.startsWith("http")) {
+            out.add(url);
+        }
+    }
+
+    private static String buildOriginVideoUrl(String originVideoKey) {
+        if (!hasText(originVideoKey)) {
+            return null;
+        }
+        String key = originVideoKey.replace("\\u002F", "/").replace("\\/", "/").trim();
+        if (key.startsWith("http://") || key.startsWith("https://")) {
+            return key;
+        }
+        while (key.startsWith("/")) {
+            key = key.substring(1);
+        }
+        if (key.isBlank()) {
+            return null;
+        }
+        // 社区常用无水印 CDN；key 形如 spectrum/1040g… 或 stream/…
+        return "https://sns-video-bd.xhscdn.com/" + key;
+    }
+
+    private static boolean isLikelyWatermarkedVideo(String url) {
+        String lower = url.toLowerCase();
+        return lower.contains("/259/")
+                || lower.contains("_259.")
+                || lower.contains("watermark")
+                || lower.contains("wm=1");
+    }
+
+    private static int scoreVideoUrl(String url) {
+        int score = 0;
+        String lower = url.toLowerCase();
+        if (lower.contains("/258/") || lower.contains("_258.")) {
+            score += 50;
+        }
+        if (lower.contains("sns-video-bd")) {
+            score += 10;
+        }
+        if (lower.contains(".mp4")) {
+            score += 5;
+        }
+        if (lower.contains("sign=")) {
+            score += 2;
+        }
+        return score;
     }
 
     private static String deepFirstMp4(JsonNode node) {
