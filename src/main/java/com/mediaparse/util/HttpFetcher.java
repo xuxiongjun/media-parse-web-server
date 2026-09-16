@@ -25,17 +25,28 @@ public class HttpFetcher {
     }
 
     public FetchResult get(String url, String userAgent, String cookie, Map<String, String> extraHeaders) throws IOException {
-        Request.Builder builder = new Request.Builder()
-                .url(url)
-                .get()
-                .header("User-Agent", userAgent)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8")
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
-        applyCookieAndExtras(builder, cookie, extraHeaders);
-        return execute(builder.build());
+        return execute(client, buildGet(url, userAgent, cookie, extraHeaders));
     }
 
-    public FetchResult postJson(String url, String jsonBody, String userAgent, String cookie, Map<String, String> extraHeaders) throws IOException {
+    /**
+     * 带独立 CookieJar 的 GET：跟随短链跳转时自动携带 Set-Cookie。
+     * 每次调用新建会话，避免多用户 Cookie 互相污染。
+     */
+    public FetchResult getWithSession(String url, String userAgent, String cookie, Map<String, String> extraHeaders)
+            throws IOException {
+        OkHttpClient session = client.newBuilder()
+                .cookieJar(new InMemoryCookieJar())
+                .build();
+        return execute(session, buildGet(url, userAgent, cookie, extraHeaders));
+    }
+
+    /** 同一会话内连续请求（共享 CookieJar）。 */
+    public SessionClient openSession() {
+        return new SessionClient(client.newBuilder().cookieJar(new InMemoryCookieJar()).build());
+    }
+
+    public FetchResult postJson(String url, String jsonBody, String userAgent, String cookie, Map<String, String> extraHeaders)
+            throws IOException {
         Request.Builder builder = new Request.Builder()
                 .url(url)
                 .post(RequestBody.create(jsonBody, JSON))
@@ -43,7 +54,23 @@ public class HttpFetcher {
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json,*/*");
         applyCookieAndExtras(builder, cookie, extraHeaders);
-        return execute(builder.build());
+        return execute(client, builder.build());
+    }
+
+    private static Request buildGet(String url, String userAgent, String cookie, Map<String, String> extraHeaders) {
+        Request.Builder builder = new Request.Builder()
+                .url(url)
+                .get()
+                .header("User-Agent", userAgent)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .header("Upgrade-Insecure-Requests", "1")
+                .header("Sec-Fetch-Dest", "document")
+                .header("Sec-Fetch-Mode", "navigate")
+                .header("Sec-Fetch-Site", "none")
+                .header("Cache-Control", "no-cache");
+        applyCookieAndExtras(builder, cookie, extraHeaders);
+        return builder.build();
     }
 
     private static void applyCookieAndExtras(Request.Builder builder, String cookie, Map<String, String> extraHeaders) {
@@ -55,8 +82,8 @@ public class HttpFetcher {
         }
     }
 
-    private FetchResult execute(Request request) throws IOException {
-        try (Response response = client.newCall(request).execute()) {
+    private static FetchResult execute(OkHttpClient httpClient, Request request) throws IOException {
+        try (Response response = httpClient.newCall(request).execute()) {
             ResponseBody body = response.body();
             String text = body != null ? body.string() : "";
             String finalUrl = response.request().url().toString();
@@ -66,6 +93,19 @@ public class HttpFetcher {
                 setCookies.addAll(values);
             }
             return new FetchResult(response.code(), finalUrl, text, response.header("Content-Type"), setCookies);
+        }
+    }
+
+    public final class SessionClient {
+        private final OkHttpClient session;
+
+        private SessionClient(OkHttpClient session) {
+            this.session = session;
+        }
+
+        public FetchResult get(String url, String userAgent, String cookie, Map<String, String> extraHeaders)
+                throws IOException {
+            return execute(session, buildGet(url, userAgent, cookie, extraHeaders));
         }
     }
 
