@@ -1,6 +1,8 @@
 package com.mediaparse.exception;
 
 import com.mediaparse.dto.ApiError;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindException;
@@ -10,6 +12,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiError> handleBusiness(BusinessException ex) {
@@ -35,7 +39,15 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleOther(Exception ex) {
+        log.error("Unhandled error", ex);
+        String detail = ex.getMessage();
+        if (detail == null || detail.isBlank()) {
+            detail = ex.getClass().getSimpleName();
+        }
+        if (detail.length() > 160) {
+            detail = detail.substring(0, 160);
+        }
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiError.builder().code("INTERNAL_ERROR").message("服务异常，请稍后重试").build());
+                .body(ApiError.builder().code("INTERNAL_ERROR").message("服务异常：" + detail).build());
     }
 }

@@ -4,6 +4,8 @@ public class StoredMedia {
     private String url;
     private String contentTypeHint;
     private String filename;
+    /** 可选：已下载的媒体字节，优先于 url 代理拉取 */
+    private byte[] payload;
 
     public static Builder builder() {
         return new Builder();
@@ -33,6 +35,18 @@ public class StoredMedia {
         this.filename = filename;
     }
 
+    public byte[] getPayload() {
+        return payload;
+    }
+
+    public void setPayload(byte[] payload) {
+        this.payload = payload;
+    }
+
+    public boolean hasPayload() {
+        return payload != null && payload.length > 0;
+    }
+
     public static final class Builder {
         private final StoredMedia target = new StoredMedia();
 
@@ -48,6 +62,11 @@ public class StoredMedia {
 
         public Builder filename(String filename) {
             target.filename = filename;
+            return this;
+        }
+
+        public Builder payload(byte[] payload) {
+            target.payload = payload;
             return this;
         }
 

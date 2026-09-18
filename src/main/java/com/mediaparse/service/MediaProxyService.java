@@ -41,14 +41,29 @@ public class MediaProxyService {
             throw new BusinessException("NOT_FOUND", "资源不存在或已过期，请重新解析");
         }
 
+        if (media.hasPayload()) {
+            return servePayload(media, download);
+        }
+
+        String ua = appProperties.getHttp().getUserAgent();
+        if (ua == null || ua.isBlank() || isByteImageHost(media.getUrl())) {
+            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+        }
+
         Request.Builder builder = new Request.Builder()
                 .url(media.getUrl())
-                .header("User-Agent", appProperties.getHttp().getUserAgent())
-                .header("Accept", "*/*");
+                .header("User-Agent", ua)
+                .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
 
         String referer = guessReferer(media.getUrl());
         if (referer != null) {
             builder.header("Referer", referer);
+            try {
+                URI ref = URI.create(referer);
+                builder.header("Origin", ref.getScheme() + "://" + ref.getHost());
+            } catch (Exception ignored) {
+                // ignore
+            }
         }
         if (rangeHeader != null && !rangeHeader.isBlank()) {
             builder.header("Range", rangeHeader);
@@ -75,6 +90,15 @@ public class MediaProxyService {
             String contentLength = response.header("Content-Length");
             if (contentLength != null) {
                 headers.set(HttpHeaders.CONTENT_LENGTH, contentLength);
+                try {
+                    long len = Long.parseLong(contentLength);
+                    if (len > 0 && len < 2048 && contentType.startsWith("image/")) {
+                        response.close();
+                        throw new BusinessException("PARSE_FAILED", "上游返回异常小图，可能被防盗链拦截");
+                    }
+                } catch (NumberFormatException ignored) {
+                    // ignore
+                }
             }
             String contentRange = response.header("Content-Range");
             if (contentRange != null) {
@@ -104,6 +128,39 @@ public class MediaProxyService {
         } catch (Exception ex) {
             throw new BusinessException("PARSE_FAILED", "媒体代理失败：" + ex.getMessage());
         }
+    }
+
+    private ProxyResult servePayload(StoredMedia media, boolean download) {
+        byte[] payload = media.getPayload();
+        HttpHeaders headers = new HttpHeaders();
+        String contentType = media.getContentTypeHint() != null
+                ? media.getContentTypeHint()
+                : MediaType.APPLICATION_OCTET_STREAM_VALUE;
+        headers.set(HttpHeaders.CONTENT_TYPE, contentType);
+        headers.set(HttpHeaders.CONTENT_LENGTH, String.valueOf(payload.length));
+        headers.set(HttpHeaders.ACCEPT_RANGES, "bytes");
+        if (download) {
+            String filename = media.getFilename() != null ? media.getFilename() : "download.bin";
+            headers.set(HttpHeaders.CONTENT_DISPOSITION, attachmentDisposition(filename));
+        } else {
+            headers.set(HttpHeaders.CONTENT_DISPOSITION, "inline");
+        }
+        StreamingResponseBody stream = outputStream -> {
+            outputStream.write(payload);
+            outputStream.flush();
+        };
+        return new ProxyResult(HttpStatus.OK, headers, stream);
+    }
+
+    private static boolean isByteImageHost(String mediaUrl) {
+        if (mediaUrl == null) {
+            return false;
+        }
+        String lower = mediaUrl.toLowerCase();
+        return lower.contains("byteimg.com")
+                || lower.contains("ivolces.com")
+                || lower.contains("doubao.com")
+                || lower.contains("tos-cn-");
     }
 
     private static void copyAndClose(InputStream in, OutputStream out, Response response) {
@@ -137,11 +194,20 @@ public class MediaProxyService {
             if (host == null) {
                 return null;
             }
+            if (host.contains("doubao") || host.contains("byteimg") || host.contains("ivolces")) {
+                return "https://www.doubao.com/";
+            }
             if (host.contains("douyin") || host.contains("byte") || host.contains("tiktok")) {
                 return "https://www.douyin.com/";
             }
             if (host.contains("xiaohongshu") || host.contains("xhscdn") || host.contains("xhs")) {
                 return "https://www.xiaohongshu.com/";
+            }
+            if (host.contains("yuanbao") || host.contains("hunyuan")) {
+                return "https://yuanbao.tencent.com/";
+            }
+            if (host.contains("jianying") || host.contains("jimeng") || host.contains("dreamina")) {
+                return "https://jimeng.jianying.com/";
             }
             return uri.getScheme() + "://" + host + "/";
         } catch (Exception e) {
