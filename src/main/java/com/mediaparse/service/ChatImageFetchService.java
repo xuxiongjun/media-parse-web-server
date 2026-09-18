@@ -52,6 +52,14 @@ public class ChatImageFetchService {
             Pattern.CASE_INSENSITIVE
     );
     private static final Pattern UNICODE_ESCAPE = Pattern.compile("\\\\u([0-9a-fA-F]{4})");
+    private static final Pattern SHARE_NAME = Pattern.compile(
+            "\"share_name\"\\s*:\\s*\"([^\"]{1,120})\"",
+            Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern CONVERSATION_NAME = Pattern.compile(
+            "\"(?:conversation_name|thread_title|chat_title|share_title)\"\\s*:\\s*\"([^\"]{1,120})\"",
+            Pattern.CASE_INSENSITIVE
+    );
     private static final Pattern TITLE_TAG = Pattern.compile(
             "<title[^>]*>(.*?)</title>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL
@@ -411,15 +419,63 @@ public class ChatImageFetchService {
     }
 
     private static String extractTitle(String html) {
+        String fromShare = firstMeaningful(SHARE_NAME, html);
+        if (fromShare != null) {
+            return fromShare;
+        }
+        String fromConv = firstMeaningful(CONVERSATION_NAME, html);
+        if (fromConv != null) {
+            return fromConv;
+        }
         Matcher og = OG_TITLE.matcher(html);
         if (og.find()) {
-            return stripTags(og.group(1)).trim();
+            String t = cleanTitle(og.group(1));
+            if (t != null) {
+                return t;
+            }
         }
         Matcher title = TITLE_TAG.matcher(html);
         if (title.find()) {
-            return stripTags(title.group(1)).trim();
+            return cleanTitle(title.group(1));
         }
         return null;
+    }
+
+    private static String firstMeaningful(Pattern pattern, String html) {
+        Matcher matcher = pattern.matcher(html);
+        while (matcher.find()) {
+            String t = cleanTitle(matcher.group(1));
+            if (t != null) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    /** 过滤空标题、站点名等无区分度文案 */
+    private static String cleanTitle(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String t = stripTags(raw).trim()
+                .replace("\\n", " ")
+                .replaceAll("\\s+", " ");
+        if (t.isBlank()) {
+            return null;
+        }
+        String lower = t.toLowerCase();
+        if (lower.equals("doubao")
+                || lower.equals("豆包")
+                || lower.equals("豆包分享")
+                || lower.equals("豆包 ai")
+                || lower.startsWith("豆包 -")
+                || lower.startsWith("doubao -")) {
+            return null;
+        }
+        if (t.length() > 60) {
+            t = t.substring(0, 60);
+        }
+        return t;
     }
 
     private static String stripTags(String text) {
